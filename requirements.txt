@@ -1,0 +1,10 @@
+# Telegram Forwarder Dependencies
+
+# Core - Telegram User API client
+telethon>=1.34.0
+
+# Optional - Load environment variables from .env file
+python-dotenv>=1.0.0
+
+# Optional - Better async support (already included in Python 3.11+)
+# anyio>=4.0.0
