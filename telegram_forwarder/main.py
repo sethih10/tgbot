@@ -23,6 +23,7 @@ from telethon.errors import SessionPasswordNeededError
 
 from .config import get_config, AppConfig
 from .handlers import MessageHandler
+from .bot import UserSubmissionBot
 
 
 def setup_logging(level: str = "INFO") -> logging.Logger:
@@ -61,6 +62,7 @@ class TelegramForwarder:
         self.logger = setup_logging(self.config.log_level)
         self.client: Optional[TelegramClient] = None
         self.handler: Optional[MessageHandler] = None
+        self.submission_bot: Optional[UserSubmissionBot] = None
         self._running = False
     
     async def authenticate(self) -> TelegramClient:
@@ -130,19 +132,24 @@ class TelegramForwarder:
             # Authenticate
             self.client = await self.authenticate()
             
-            # Set up message handler
+            # Set up message handler for channel forwarding
             self.handler = MessageHandler(self.client, self.config)
             await self.handler.setup_handlers()
+            
+            # Set up user submission bot
+            self.submission_bot = UserSubmissionBot(self.client, self.config)
+            await self.submission_bot.setup_handlers()
             
             self._running = True
             
             # Print startup info
             print("\n" + "=" * 50)
-            print("TELEGRAM FORWARDER RUNNING")
+            print("TELEGRAM FORWARDER + SUBMISSION BOT RUNNING")
             print("=" * 50)
             print(f"Monitoring {len(self.config.channels.source_channels)} source channel(s)")
             print(f"Forwarding to: {self.config.channels.destination_channel}")
             print(f"Mode: {'Forward' if self.config.channels.forward_mode else 'Copy'}")
+            print("\n📮 User submissions: Users can DM this account to submit listings")
             print("\nPress Ctrl+C to stop.")
             print("=" * 50 + "\n")
             
@@ -162,10 +169,18 @@ class TelegramForwarder:
         if self.handler:
             stats = self.handler.get_stats()
             self.logger.info(
-                f"Session stats - Received: {stats['messages_received']}, "
+                f"Forwarder stats - Received: {stats['messages_received']}, "
                 f"Forwarded: {stats['messages_forwarded']}, "
                 f"Filtered: {stats['messages_filtered']}, "
                 f"Errors: {stats['errors']}"
+            )
+        
+        if self.submission_bot:
+            bot_stats = self.submission_bot.get_stats()
+            self.logger.info(
+                f"Submission bot stats - Received: {bot_stats['submissions_received']}, "
+                f"Approved: {bot_stats['submissions_approved']}, "
+                f"Rejected: {bot_stats['submissions_rejected']}"
             )
         
         if self.client:

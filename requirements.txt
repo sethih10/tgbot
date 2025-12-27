@@ -1,7 +1,10 @@
 # Telegram Forwarder Dependencies
 
-# Core - Telegram User API client
+# Core - Telegram User API client (for channel forwarding)
 telethon>=1.34.0
+
+# Bot API client (for dedicated submission bot)
+python-telegram-bot>=21.0
 
 # Optional - Load environment variables from .env file
 python-dotenv>=1.0.0
