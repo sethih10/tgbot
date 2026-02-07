@@ -328,3 +328,131 @@ asyncio.run(test())
 ## 📄 License
 
 This project is for educational purposes. Use responsibly and in accordance with Telegram's Terms of Service.
+
+
+type ~/.ssh/id_ed25519.pub
+
+
+
+type %USERPROFILE%\.ssh\id_ed25519.pub | clip
+
+
+
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHXontnw+lPKfmqyyEOBd0cGLtjHcmHTuj9wxNFAGzgR saluvey@DESKTOP-D5R5C6J
+
+
+type %USERPROFILE%\.ssh\id_ed25519 | clip
+
+
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACB16J7Z8PpTyn5qsshDgXdHBi7Yx3Jh07o/cMTRQBs4EQAAAKAWAT5WFgE+
+VgAAAAtzc2gtZWQyNTUxOQAAACB16J7Z8PpTyn5qsshDgXdHBi7Yx3Jh07o/cMTRQBs4EQ
+AAAEDiwNbuSf1wCKog7RpvaZusETdcLC2ROECmP8ztdSp6LnXontnw+lPKfmqyyEOBd0cG
+LtjHcmHTuj9wxNFAGzgRAAAAF3NhbHV2ZXlAREVTS1RPUC1ENVI1QzZKAQIDBAUG
+-----END OPENSSH PRIVATE KEY-----
+
+---
+
+## 🖥️ Yandex Cloud VM Deployment
+
+### VM Details
+
+| Setting | Value |
+|---------|-------|
+| **IP Address** | `89.169.170.167` |
+| **Username** | `anastasiia` |
+| **Bot Directory** | `/home/anastasiia/tg_bot` |
+| **Virtual Env** | `venv_tg` |
+
+### Connect to VM
+
+```bash
+# From Windows PowerShell or Linux/Mac terminal
+ssh -i ~/.ssh/tgbot_key -l anastasiia 89.169.170.167
+```
+
+### Quick Commands (Run on VM)
+
+```bash
+# Go to bot directory
+cd ~/tg_bot
+
+# Activate virtual environment
+source venv_tg/bin/activate
+
+# Run bot manually (for testing)
+python -m telegram_forwarder.main
+
+# Stop manual run
+Ctrl + C
+```
+
+### Service Management (Run 24/7)
+
+```bash
+# Start the bot service
+sudo systemctl start telegram-bot
+
+# Stop the bot service
+sudo systemctl stop telegram-bot
+
+# Restart the bot service
+sudo systemctl restart telegram-bot
+
+# Check if bot is running
+sudo systemctl status telegram-bot
+
+# View live logs
+sudo journalctl -u telegram-bot -f
+
+# View recent logs
+sudo journalctl -u telegram-bot --since "1 hour ago"
+```
+
+### Update Bot Code
+
+```bash
+# 1. Stop the service
+sudo systemctl stop telegram-bot
+
+# 2. Update files (from your local Windows machine)
+scp -r "C:\Users\Saluvey\Desktop\Mushrooms\tgbot-main\*" anastasiia@89.169.170.167:~/tg_bot/
+
+# 3. On VM: restart service
+sudo systemctl start telegram-bot
+```
+
+### Service File Location
+
+The systemd service file is at: `/etc/systemd/system/telegram-bot.service`
+
+```ini
+[Unit]
+Description=Telegram Forwarder Bot
+After=network.target
+
+[Service]
+Type=simple
+User=anastasiia
+WorkingDirectory=/home/anastasiia/tg_bot
+Environment=PATH=/home/anastasiia/tg_bot/venv_tg/bin
+EnvironmentFile=/home/anastasiia/tg_bot/.env
+ExecStart=/home/anastasiia/tg_bot/venv_tg/bin/python -m telegram_forwarder.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+After editing the service file:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart telegram-bot
+```
+
+
+sudo systemctl daemon-reload      # Tell Linux "I added a new service"
+sudo systemctl enable telegram-bot # "Start this bot every time VM boots"
+sudo systemctl start telegram-bot  # "Start the bot RIGHT NOW"
