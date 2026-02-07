@@ -33,7 +33,8 @@ class MessageFilter:
         Returns:
             True if the message passes all filters, False otherwise
         """
-        text = message.text or message.caption or ""
+        # In Telethon, message.text contains both text and media captions
+        text = message.text or ""
         
         # Check if it's a media-only message
         if not text and message.media:
@@ -172,11 +173,31 @@ class MessageHandler:
             else:
                 # Copy mode: sends as your account
                 if message.media:
-                    await self.client.send_file(
-                        dest,
-                        message.media,
-                        caption=message.text or message.caption,
-                    )
+                    # For stickers, download and re-upload to preserve them
+                    if message.sticker:
+                        try:
+                            # Download sticker to bytes
+                            sticker_bytes = await self.client.download_media(message, file=bytes)
+                            if sticker_bytes:
+                                # Re-upload with original attributes
+                                await self.client.send_file(
+                                    dest,
+                                    sticker_bytes,
+                                    attributes=message.media.document.attributes,
+                                    force_document=False
+                                )
+                            else:
+                                # Fallback to direct send
+                                await self.client.send_file(dest, message.media)
+                        except Exception as e:
+                            logger.warning(f"Sticker copy failed: {e}, skipping")
+                            return False
+                    else:
+                        await self.client.send_file(
+                            dest,
+                            message.media,
+                            caption=message.text,
+                        )
                 else:
                     await self.client.send_message(dest, message.text)
                 logger.info(f"Copied message {message.id} to {dest.title}")
@@ -188,8 +209,8 @@ class MessageHandler:
             # Retry after waiting
             return await self.forward_message(message)
         
-        except ChatWriteForbiddenError:
-            logger.error(f"Cannot write to destination channel - check permissions!")
+        except ChatWriteForbiddenError as e:
+            logger.error(f"Cannot write to destination channel '{self.config.channels.destination_channel}' - check permissions! Error: {e}")
             self.stats["errors"] += 1
             return False
         
