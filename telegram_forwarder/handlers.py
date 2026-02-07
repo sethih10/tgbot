@@ -33,10 +33,11 @@ class MessageFilter:
         Returns:
             True if the message passes all filters, False otherwise
         """
-        text = message.text or message.caption or ""
+        text = message.text or ""
         
-        # Check if it's a media-only message
-        if not text and message.media:
+        # Check if it's a media message (with or without caption)
+        # Media messages bypass keyword filters - keywords only apply to text-only messages
+        if message.media:
             return self.filters.include_media_only
         
         # Check minimum length
@@ -114,6 +115,9 @@ class MessageHandler:
         # Cache for resolved channel entities
         self._channel_cache: Dict[str, Any] = {}
         
+        # Buffer for grouped messages
+        self.pending_groups: Dict[int, Dict] = {}  # grouped_id -> {'messages': [], 'caption': str, 'timer': Task}
+        
         # Statistics
         self.stats = {
             "messages_received": 0,
@@ -175,7 +179,7 @@ class MessageHandler:
                     await self.client.send_file(
                         dest,
                         message.media,
-                        caption=message.text or message.caption,
+                        caption=message.text or "",
                     )
                 else:
                     await self.client.send_message(dest, message.text)
@@ -222,9 +226,74 @@ class MessageHandler:
         # Rate limiting
         await self.rate_limiter.wait_if_needed()
         
-        # Forward the message
-        if await self.forward_message(message):
-            self.stats["messages_forwarded"] += 1
+        # Handle grouped messages
+        if message.grouped_id:
+            await self.handle_grouped_message(message)
+        else:
+            # Forward single message
+            if await self.forward_message(message):
+                self.stats["messages_forwarded"] += 1
+    
+    async def handle_grouped_message(self, message: Message) -> None:
+        """Handle messages that are part of a group (e.g., multiple images)."""
+        grouped_id = message.grouped_id
+        
+        if grouped_id not in self.pending_groups:
+            # Start a new group
+            self.pending_groups[grouped_id] = {
+                'messages': [],
+                'caption': message.text or '',
+                'timer': asyncio.create_task(self.send_group(grouped_id, delay=5.0))
+            }
+        else:
+            # Cancel existing timer and start new one
+            self.pending_groups[grouped_id]['timer'].cancel()
+            self.pending_groups[grouped_id]['timer'] = asyncio.create_task(self.send_group(grouped_id, delay=5.0))
+        
+        # Add message to group
+        self.pending_groups[grouped_id]['messages'].append(message)
+    
+    async def send_group(self, grouped_id: int, delay: float) -> None:
+        """Send a group of messages after collecting them."""
+        await asyncio.sleep(delay)
+        
+        group = self.pending_groups.pop(grouped_id, None)
+        if not group or not group['messages']:
+            return
+        
+        messages = group['messages']
+        # Sort by message ID to maintain order
+        messages.sort(key=lambda m: m.id)
+        
+        try:
+            dest = await self.resolve_channel(self.config.channels.destination_channel)
+            
+            if self.config.channels.forward_mode:
+                # Forward mode: forward all messages in group
+                await self.client.forward_messages(dest, messages)
+                logger.info(f"Forwarded group of {len(messages)} messages to {dest.title}")
+            else:
+                # Copy mode: send all media as a group
+                media_list = [m.media for m in messages if m.media]
+                if media_list:
+                    await self.client.send_file(
+                        dest,
+                        media_list,
+                        caption=group['caption']
+                    )
+                    logger.info(f"Copied group of {len(messages)} media to {dest.title}")
+                else:
+                    # If no media, send as text messages
+                    for msg in messages:
+                        if msg.text:
+                            await self.client.send_message(dest, msg.text)
+                            await asyncio.sleep(0.5)  # Small delay between messages
+            
+            self.stats["messages_forwarded"] += len(messages)
+            
+        except Exception as e:
+            logger.error(f"Error forwarding group {grouped_id}: {e}")
+            self.stats["errors"] += 1
     
     async def setup_handlers(self) -> None:
         """Set up event handlers for all source channels."""
