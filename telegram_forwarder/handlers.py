@@ -126,6 +126,12 @@ class MessageHandler:
             "errors": 0,
         }
     
+    def rewrite_text(self, text: str) -> str:
+        """Rewrite text content before forwarding (e.g., replace usernames)."""
+        if not text:
+            return text
+        return text.replace('@Stassi99', '@saluvey')
+    
     async def resolve_channel(self, channel_id: str) -> Any:
         """
         Resolve a channel identifier to a Telegram entity.
@@ -179,10 +185,10 @@ class MessageHandler:
                     await self.client.send_file(
                         dest,
                         message.media,
-                        caption=message.text or "",
+                        caption=self.rewrite_text(message.text or ""),
                     )
                 else:
-                    await self.client.send_message(dest, message.text)
+                    await self.client.send_message(dest, self.rewrite_text(message.text))
                 logger.info(f"Copied message {message.id} to {dest.title}")
             
             return True
@@ -243,12 +249,12 @@ class MessageHandler:
             self.pending_groups[grouped_id] = {
                 'messages': [],
                 'caption': message.text or '',
-                'timer': asyncio.create_task(self.send_group(grouped_id, delay=5.0))
+                'timer': asyncio.create_task(self.send_group(grouped_id, delay=10.0))
             }
         else:
             # Cancel existing timer and start new one
             self.pending_groups[grouped_id]['timer'].cancel()
-            self.pending_groups[grouped_id]['timer'] = asyncio.create_task(self.send_group(grouped_id, delay=5.0))
+            self.pending_groups[grouped_id]['timer'] = asyncio.create_task(self.send_group(grouped_id, delay=10.0))
         
         # Add message to group
         self.pending_groups[grouped_id]['messages'].append(message)
@@ -265,9 +271,37 @@ class MessageHandler:
         # Sort by message ID to maintain order
         messages.sort(key=lambda m: m.id)
         
+        # Gather all text from group
+        group_texts = [m.text for m in messages if m.text]
+        group_caption = group.get('caption', '')
+        full_text = ' '.join(group_texts + [group_caption]).strip()
+
+        # Check for excluded keywords
+        filters = self.config.filters
+        if filters.exclude_keywords:
+            text_lower = full_text.lower()
+            if any(kw.lower() in text_lower for kw in filters.exclude_keywords):
+                logger.info(f"Grouped message {grouped_id} contains excluded keywords, not forwarding.")
+                self.stats["messages_filtered"] += len(messages)
+                return
+
+        # Require some text
+        if not full_text:
+            logger.info(f"Grouped message {grouped_id} contains no text, not forwarding.")
+            self.stats["messages_filtered"] += len(messages)
+            return
+
+        # Require at least one included keyword
+        if filters.include_keywords:
+            text_lower = full_text.lower()
+            if not any(kw.lower() in text_lower for kw in filters.include_keywords):
+                logger.info(f"Grouped message {grouped_id} does not contain required keywords, not forwarding.")
+                self.stats["messages_filtered"] += len(messages)
+                return
+
         try:
             dest = await self.resolve_channel(self.config.channels.destination_channel)
-            
+
             if self.config.channels.forward_mode:
                 # Forward mode: forward all messages in group
                 await self.client.forward_messages(dest, messages)
@@ -279,18 +313,18 @@ class MessageHandler:
                     await self.client.send_file(
                         dest,
                         media_list,
-                        caption=group['caption']
+                        caption=self.rewrite_text(group_caption)
                     )
                     logger.info(f"Copied group of {len(messages)} media to {dest.title}")
                 else:
                     # If no media, send as text messages
                     for msg in messages:
                         if msg.text:
-                            await self.client.send_message(dest, msg.text)
+                            await self.client.send_message(dest, self.rewrite_text(msg.text))
                             await asyncio.sleep(0.5)  # Small delay between messages
-            
+
             self.stats["messages_forwarded"] += len(messages)
-            
+
         except Exception as e:
             logger.error(f"Error forwarding group {grouped_id}: {e}")
             self.stats["errors"] += 1
@@ -298,27 +332,63 @@ class MessageHandler:
     async def setup_handlers(self) -> None:
         """Set up event handlers for all source channels."""
         source_entities = []
-        
         for channel_id in self.config.channels.source_channels:
             try:
                 entity = await self.resolve_channel(channel_id)
                 source_entities.append(entity)
             except Exception as e:
                 logger.error(f"Failed to set up handler for {channel_id}: {e}")
-        
         if not source_entities:
             raise ValueError("No valid source channels found!")
-        
-        # Register the event handler
+        # Register the event handler for new messages
         @self.client.on(events.NewMessage(chats=source_entities))
         async def handler(event):
             await self.handle_new_message(event)
-        
+        # Register the event handler for edited messages
+        @self.client.on(events.MessageEdited(chats=source_entities))
+        async def edit_handler(event):
+            await self.handle_edited_message(event)
         logger.info(f"Set up handlers for {len(source_entities)} source channel(s)")
-        
         # Also resolve destination to verify access
         dest = await self.resolve_channel(self.config.channels.destination_channel)
         logger.info(f"Destination channel verified: {dest.title}")
+        async def handle_edited_message(self, event: events.MessageEdited.Event) -> None:
+            """
+            Event handler for edited messages in source channels.
+            Updates the forwarded message in the destination channel.
+            """
+            message = event.message
+            self.stats["messages_received"] += 1
+            chat = await event.get_chat()
+            chat_title = getattr(chat, 'title', str(chat.id))
+            logger.debug(f"Edited message from {chat_title}: {message.id}")
+            # Apply filters
+            if not self.message_filter.should_forward(message):
+                self.stats["messages_filtered"] += 1
+                logger.debug(f"Edited message {message.id} filtered out")
+                return
+            # Rate limiting
+            await self.rate_limiter.wait_if_needed()
+            # Update the forwarded message
+            await self.update_forwarded_message(message)
+
+        async def update_forwarded_message(self, message: Message) -> None:
+            """
+            Update the forwarded message in the destination channel when the source message is edited.
+            """
+            try:
+                dest = await self.resolve_channel(self.config.channels.destination_channel)
+                # You need to track the mapping between source and destination message IDs.
+                # For now, this is a placeholder. Implement message ID mapping for production use.
+                # Example: dest_msg_id = self.get_dest_msg_id(message.id)
+                dest_msg_id = None  # Replace with actual lookup
+                if dest_msg_id:
+                    await self.client.edit_message(dest, dest_msg_id, message.text or message.caption)
+                    logger.info(f"Updated forwarded message {dest_msg_id} in {dest.title}")
+                else:
+                    logger.warning(f"No destination message found for source message {message.id}")
+            except Exception as e:
+                logger.error(f"Error updating forwarded message {message.id}: {e}")
     
     def get_stats(self) -> Dict[str, int]:
         """Get current statistics."""
