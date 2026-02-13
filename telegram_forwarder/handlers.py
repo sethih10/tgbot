@@ -26,39 +26,40 @@ class MessageFilter:
     def should_forward(self, message: Message) -> bool:
         """
         Determine if a message should be forwarded based on filter rules.
-        
         Args:
             message: The Telegram message to evaluate
-            
         Returns:
             True if the message passes all filters, False otherwise
         """
+        import re
         text = message.text or ""
-        
         # Check if it's a media message (with or without caption)
-        # Media messages bypass keyword filters - keywords only apply to text-only messages
         if message.media:
             return self.filters.include_media_only
-        
         # Check minimum length
         if len(text) < self.filters.min_message_length:
             logger.debug(f"Message too short: {len(text)} < {self.filters.min_message_length}")
             return False
-        
         # Check include keywords (if specified, at least one must match)
         if self.filters.include_keywords:
             text_lower = text.lower()
             if not any(kw.lower() in text_lower for kw in self.filters.include_keywords):
                 logger.debug("Message doesn't contain required keywords")
                 return False
-        
-        # Check exclude keywords (none should match)
+        # Check exclude keywords and phrases (none should match)
         if self.filters.exclude_keywords:
             text_lower = text.lower()
-            if any(kw.lower() in text_lower for kw in self.filters.exclude_keywords):
-                logger.debug("Message contains excluded keywords")
-                return False
-        
+            for kw in self.filters.exclude_keywords:
+                # Exact phrase or regex
+                if ' ' in kw:
+                    # Phrase exclusion: match as phrase or with regex
+                    if re.search(re.escape(kw.lower()), text_lower):
+                        logger.debug(f"Message contains excluded phrase: '{kw}'")
+                        return False
+                else:
+                    if kw.lower() in text_lower:
+                        logger.debug(f"Message contains excluded keyword: '{kw}'")
+                        return False
         return True
 
 
@@ -276,14 +277,22 @@ class MessageHandler:
         group_caption = group.get('caption', '')
         full_text = ' '.join(group_texts + [group_caption]).strip()
 
-        # Check for excluded keywords
+        # Check for excluded keywords and phrases
+        import re
         filters = self.config.filters
         if filters.exclude_keywords:
             text_lower = full_text.lower()
-            if any(kw.lower() in text_lower for kw in filters.exclude_keywords):
-                logger.info(f"Grouped message {grouped_id} contains excluded keywords, not forwarding.")
-                self.stats["messages_filtered"] += len(messages)
-                return
+            for kw in filters.exclude_keywords:
+                if ' ' in kw:
+                    if re.search(re.escape(kw.lower()), text_lower):
+                        logger.info(f"Grouped message {grouped_id} contains excluded phrase: '{kw}', not forwarding.")
+                        self.stats["messages_filtered"] += len(messages)
+                        return
+                else:
+                    if kw.lower() in text_lower:
+                        logger.info(f"Grouped message {grouped_id} contains excluded keyword: '{kw}', not forwarding.")
+                        self.stats["messages_filtered"] += len(messages)
+                        return
 
         # Require some text
         if not full_text:
